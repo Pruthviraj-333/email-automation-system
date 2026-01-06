@@ -109,48 +109,48 @@ Return a JSON object with:
         prompt = ChatPromptTemplate.from_messages([
             ("system", """You are an email response assistant. Generate appropriate, professional email responses.
 
-    CRITICAL: You MUST return ONLY valid JSON. Do NOT include any text before or after the JSON object.
-    Do NOT write the email response as plain text before the JSON.
-    Do NOT include explanations, preambles, or any other text.
+CRITICAL: You MUST return ONLY valid JSON. Do NOT include any text before or after the JSON object.
+Do NOT write the email response as plain text before the JSON.
+Do NOT include explanations, preambles, or any other text.
 
-    START your response with {{ and END with }}
+START your response with {{ and END with }}
 
-    IMPORTANT FORMATTING RULES:
-    1. Use proper paragraph breaks (double newline \\n\\n) between main ideas
-    2. Use single newlines (\\n) for line breaks within paragraphs
-    3. Keep paragraphs short (2-3 sentences)
-    4. Start with a greeting on its own line
-    5. End with a closing on its own line
-    6. Structure: Greeting → Body paragraphs → Closing → Signature
+IMPORTANT FORMATTING RULES:
+1. Use proper paragraph breaks (double newline \\n\\n) between main ideas
+2. Use single newlines (\\n) for line breaks within paragraphs
+3. Keep paragraphs short (2-3 sentences)
+4. Start with a greeting on its own line
+5. End with a closing on its own line
+6. Structure: Greeting → Body paragraphs → Closing → Signature
 
-    Example JSON format (this is what you should return):
-    {{
-    "response_body": "Hello [Name],\\n\\nThank you for your email.\\n\\nI understand your concern.\\n\\nBest regards,\\n[Name]",
-    "tone": "friendly",
-    "confidence": 0.9
-    }}
+Example JSON format (this is what you should return):
+{{
+  "response_body": "Hello [Name],\\n\\nThank you for your email.\\n\\nI understand your concern.\\n\\nBest regards,\\n[Name]",
+  "tone": "friendly",
+  "confidence": 0.9
+}}
 
-    {format_instructions}"""),
+{format_instructions}"""),
             ("user", """Generate a response for this email:
 
-    Subject: {subject}
-    From: {sender}
-    Body: {body}
+Subject: {subject}
+From: {sender}
+Body: {body}
 
-    Analysis:
-    Category: {category}
-    Priority: {priority}
-    Sentiment: {sentiment}
-    Key Points: {key_points}
+Analysis:
+Category: {category}
+Priority: {priority}
+Sentiment: {sentiment}
+Key Points: {key_points}
 
-    Generate a professional, well-formatted response that:
-    1. Acknowledges the email
-    2. Addresses the key points
-    3. Is appropriate for the context and priority
-    4. Uses proper paragraph breaks and formatting
-    5. Maintains a {sentiment_tone} tone
+Generate a professional, well-formatted response that:
+1. Acknowledges the email
+2. Addresses the key points
+3. Is appropriate for the context and priority
+4. Uses proper paragraph breaks and formatting
+5. Maintains a {sentiment_tone} tone
 
-    REMEMBER: Return ONLY the JSON object, nothing else. Start with {{ and end with }}""")
+REMEMBER: Return ONLY the JSON object, nothing else. Start with {{ and end with }}""")
         ])
         
         # Determine tone based on sentiment
@@ -174,28 +174,38 @@ Return a JSON object with:
             # Extract JSON from the response
             response_text = result.content if hasattr(result, 'content') else str(result)
             
-            # Try to find JSON in the response
+            # Try to find JSON in the response using regex
             import json
             import re
             
-            # Method 1: Try to find JSON object with regex
+            # Method 1: Try to find JSON object with regex (handles text before/after)
             json_match = re.search(r'\{[\s\S]*\}', response_text)
             if json_match:
                 json_str = json_match.group(0)
-                parsed_data = json.loads(json_str)
-                return EmailResponse(**parsed_data)
+                try:
+                    parsed_data = json.loads(json_str)
+                    return EmailResponse(**parsed_data)
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON parsing failed: {e}")
+                    logger.error(f"Attempted to parse: {json_str[:200]}")
             
             # Method 2: Try to parse the whole thing
-            parsed_data = json.loads(response_text)
-            return EmailResponse(**parsed_data)
+            try:
+                parsed_data = json.loads(response_text)
+                return EmailResponse(**parsed_data)
+            except json.JSONDecodeError:
+                pass
+            
+            # If all parsing fails, log and return fallback
+            logger.error(f"All JSON parsing methods failed for response")
+            logger.error(f"Raw response (first 500 chars): {response_text[:500]}")
             
         except Exception as e:
-            logger.error(f"Error parsing LLM response: {e}")
-            logger.error(f"Raw response: {response_text[:500]}")
-            
-            # Fallback: Create a basic response
-            return EmailResponse(
-                response_body=f"Thank you for your email regarding: {subject}\n\nI have received your message and will respond shortly.\n\nBest regards",
-                tone="formal",
-                confidence=0.5
-            )
+            logger.error(f"Error generating response: {e}")
+        
+        # Fallback: Create a basic response
+        return EmailResponse(
+            response_body=f"Thank you for your email regarding: {subject}\n\nI have received your message and will respond shortly.\n\nBest regards",
+            tone="formal",
+            confidence=0.5
+        )

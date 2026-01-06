@@ -1,8 +1,11 @@
+"""
+Updated Database Module - Multi-User Support
+"""
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict
 import logging
-from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text
+from sqlalchemy import create_engine, Column, String, Integer, DateTime, Text, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from dotenv import load_dotenv
@@ -20,11 +23,12 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
-# Define Email model
+# Email Model - Now with user_id
 class EmailModel(Base):
     __tablename__ = "emails"
     
     id = Column(String(255), primary_key=True, index=True)
+    user_id = Column(String(255), index=True, nullable=False)  # Link to user
     subject = Column(Text)
     sender = Column(String(255), index=True)
     received_date = Column(DateTime)
@@ -55,11 +59,14 @@ class Database:
         """Get a database session"""
         return SessionLocal()
 
-    def is_processed(self, email_id: str) -> bool:
-        """Check if an email has been processed"""
+    def is_processed(self, email_id: str, user_id: str) -> bool:
+        """Check if an email has been processed for a specific user"""
         session = self.get_session()
         try:
-            result = session.query(EmailModel).filter(EmailModel.id == email_id).first()
+            result = session.query(EmailModel).filter(
+                EmailModel.id == email_id,
+                EmailModel.user_id == user_id
+            ).first()
             return result is not None
         finally:
             session.close()
@@ -67,6 +74,7 @@ class Database:
     def mark_as_processed(
         self,
         email_id: str,
+        user_id: str,
         status: str,
         response_sent: Optional[str] = None,
         category: Optional[str] = None,
@@ -76,13 +84,16 @@ class Database:
         sender: Optional[str] = None,
         thread_id: Optional[str] = None
     ):
-        """Mark an email as processed"""
+        """Mark an email as processed for a specific user"""
         session = self.get_session()
         try:
             processed_date = datetime.now()
             
             # Check if email already exists
-            email = session.query(EmailModel).filter(EmailModel.id == email_id).first()
+            email = session.query(EmailModel).filter(
+                EmailModel.id == email_id,
+                EmailModel.user_id == user_id
+            ).first()
             
             if email:
                 # Update existing record
@@ -99,6 +110,7 @@ class Database:
                 # Create new record
                 email = EmailModel(
                     id=email_id,
+                    user_id=user_id,
                     subject=subject,
                     sender=sender,
                     received_date=datetime.now(),
@@ -113,7 +125,7 @@ class Database:
                 session.add(email)
             
             session.commit()
-            logger.info(f"Marked email {email_id} as {status}")
+            logger.info(f"Marked email {email_id} as {status} for user {user_id}")
         except Exception as e:
             session.rollback()
             logger.error(f"Error marking email as processed: {e}")
@@ -123,13 +135,14 @@ class Database:
 
     def get_processed_emails(
         self,
+        user_id: str,
         limit: int = 100,
-        status: Optional[str] = None ) -> List[Dict]:
-        
-        """Get processed emails from database"""
+        status: Optional[str] = None
+    ) -> List[Dict]:
+        """Get processed emails for a specific user"""
         session = self.get_session()
         try:
-            query = session.query(EmailModel)
+            query = session.query(EmailModel).filter(EmailModel.user_id == user_id)
             
             if status:
                 query = query.filter(EmailModel.status == status)
@@ -156,21 +169,21 @@ class Database:
         finally:
             session.close()
 
-    def get_stats(self) -> Dict:
-        """Get processing statistics"""
+    def get_stats(self, user_id: str) -> Dict:
+        """Get processing statistics for a specific user"""
         session = self.get_session()
         try:
             stats = {}
             
-            # Total processed
-            total = session.query(EmailModel).count()
+            # Total processed for this user
+            total = session.query(EmailModel).filter(EmailModel.user_id == user_id).count()
             stats['total_processed'] = total
             
             # By status
             status_counts = session.query(
                 EmailModel.status,
                 EmailModel.id
-            ).all()
+            ).filter(EmailModel.user_id == user_id).all()
             
             by_status = {}
             for status, _ in status_counts:
@@ -182,7 +195,7 @@ class Database:
             category_counts = session.query(
                 EmailModel.category,
                 EmailModel.id
-            ).all()
+            ).filter(EmailModel.user_id == user_id).all()
             
             by_category = {}
             for category, _ in category_counts:
@@ -193,6 +206,7 @@ class Database:
             # Today's processed
             today = datetime.now().date()
             today_count = session.query(EmailModel).filter(
+                EmailModel.user_id == user_id,
                 EmailModel.processed_date >= datetime.combine(today, datetime.min.time())
             ).count()
             stats['processed_today'] = today_count
@@ -201,20 +215,19 @@ class Database:
         finally:
             session.close()
 
-    def cleanup_old_records(self, days: int = 30) -> int:
-        """Delete records older than specified days"""
+    def cleanup_old_records(self, user_id: str, days: int = 30) -> int:
+        """Delete records older than specified days for a specific user"""
         session = self.get_session()
         try:
-            cutoff_date = datetime.now()
-            from datetime import timedelta
-            cutoff_date = cutoff_date - timedelta(days=days)
+            cutoff_date = datetime.now() - timedelta(days=days)
             
             deleted = session.query(EmailModel).filter(
+                EmailModel.user_id == user_id,
                 EmailModel.processed_date < cutoff_date
             ).delete()
             
             session.commit()
-            logger.info(f"Cleaned up {deleted} old records")
+            logger.info(f"Cleaned up {deleted} old records for user {user_id}")
             return deleted
         except Exception as e:
             session.rollback()
@@ -223,11 +236,14 @@ class Database:
         finally:
             session.close()
 
-    def get_email_by_id(self, email_id: str) -> Optional[Dict]:
-        """Get a specific email by ID"""
+    def get_email_by_id(self, email_id: str, user_id: str) -> Optional[Dict]:
+        """Get a specific email by ID for a specific user"""
         session = self.get_session()
         try:
-            email = session.query(EmailModel).filter(EmailModel.id == email_id).first()
+            email = session.query(EmailModel).filter(
+                EmailModel.id == email_id,
+                EmailModel.user_id == user_id
+            ).first()
             
             if not email:
                 return None
@@ -250,15 +266,16 @@ class Database:
 
     def search_emails(
         self,
+        user_id: str,
         search_term: str = None,
         category: str = None,
         status: str = None,
         limit: int = 100
     ) -> List[Dict]:
-        """Search emails with filters"""
+        """Search emails with filters for a specific user"""
         session = self.get_session()
         try:
-            query = session.query(EmailModel)
+            query = session.query(EmailModel).filter(EmailModel.user_id == user_id)
             
             if search_term:
                 search_pattern = f"%{search_term}%"
@@ -297,11 +314,5 @@ if __name__ == "__main__":
     try:
         db = Database()
         print("✓ Database connection successful!")
-        stats = db.get_stats()
-        print(f"Stats: {stats}")
     except Exception as e:
         print(f"✗ Database connection failed: {e}")
-        print("\nMake sure:")
-        print("1. PostgreSQL is running")
-        print("2. Database 'email_automation' exists")
-        print("3. DATABASE_URL in .env is correct")

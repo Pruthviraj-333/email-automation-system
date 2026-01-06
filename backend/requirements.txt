@@ -1,26 +1,35 @@
-# Core Dependencies
+# ---------------- Core Framework ----------------
 fastapi
 uvicorn[standard]
-pydantic
 python-dotenv
 
-# LangChain & LLM
+# ---------------- Pydantic ----------------
+pydantic
+pydantic[email]
+
+# ---------------- Authentication & Security ----------------
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+
+# ---------------- LangChain & LLM ----------------
 langchain
 langchain-groq
 groq
 
-# Google APIs
+# ---------------- Google APIs ----------------
 google-api-python-client
+google-auth
 google-auth-httplib2
 google-auth-oauthlib
 
-# Database
+# ---------------- Database ----------------
+sqlalchemy
+psycopg2-binary
 aiosqlite
 
-# HTTP & CORS
+# ---------------- HTTP ----------------
 httpx
-python-multipart
 
-
-psycopg2-binary
-sqlalchemy
+# ---------------- Utilities ----------------
+python-dateutil
