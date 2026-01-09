@@ -33,8 +33,11 @@ class UserModel(Base):
     
     id = Column(String(255), primary_key=True, index=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
+    hashed_password = Column(String(255), nullable=True)  # Nullable for Google login
     name = Column(String(255), nullable=False)
+    google_id = Column(String(255), unique=True, nullable=True, index=True)  # NEW
+    picture = Column(String(512), nullable=True)  # NEW: Profile picture
+    auth_provider = Column(String(50), default='email')  # NEW: 'email' or 'google'
     gmail_connected = Column(Boolean, default=False)
     gmail_email = Column(String(255), nullable=True)
     gmail_refresh_token = Column(Text, nullable=True)
@@ -69,6 +72,8 @@ class UserResponse(BaseModel):
     id: str
     email: str
     name: str
+    picture: Optional[str] = None
+    auth_provider: str
     gmail_connected: bool
     gmail_email: Optional[str] = None
     created_at: datetime
@@ -96,16 +101,16 @@ def get_db():
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify password against hash"""
-    # Bcrypt has a 72 byte limit
-    if len(plain_password) > 72:
+    # Bcrypt has a 72 byte limit, truncate if necessary
+    if len(plain_password.encode('utf-8')) > 72:
         plain_password = plain_password[:72]
     return pwd_context.verify(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
     """Hash a password"""
-    # Bcrypt has a 72 byte limit
-    if len(password) > 72:
+    # Bcrypt has a 72 byte limit, truncate if necessary
+    if len(password.encode('utf-8')) > 72:
         password = password[:72]
     return pwd_context.hash(password)
 
@@ -202,12 +207,55 @@ async def get_current_user(
     return user
 
 
+def get_user_by_google_id(db: Session, google_id: str) -> Optional[UserModel]:
+    """Get user by Google ID"""
+    return db.query(UserModel).filter(UserModel.google_id == google_id).first()
+
+
+def create_user_from_google(db: Session, google_data: dict) -> UserModel:
+    """Create new user from Google OAuth data"""
+    # Check if user already exists by email
+    existing_user = get_user_by_email(db, google_data['email'])
+    if existing_user:
+        # Update with Google ID if not set
+        if not existing_user.google_id:
+            existing_user.google_id = google_data['google_id']
+            existing_user.picture = google_data.get('picture')
+            existing_user.auth_provider = 'google'
+            db.commit()
+            db.refresh(existing_user)
+        return existing_user
+    
+    # Create new user
+    user_id = str(uuid.uuid4())
+    
+    db_user = UserModel(
+        id=user_id,
+        email=google_data['email'],
+        hashed_password=None,  # No password for Google login
+        name=google_data['name'],
+        google_id=google_data['google_id'],
+        picture=google_data.get('picture'),
+        auth_provider='google',
+        gmail_connected=False
+    )
+    
+    db.add(db_user)
+    db.commit()
+    db.refresh(db_user)
+    
+    logger.info(f"Created new user from Google: {google_data['email']}")
+    return db_user
+
+
 def user_to_response(user: UserModel) -> UserResponse:
     """Convert UserModel to UserResponse"""
     return UserResponse(
         id=user.id,
         email=user.email,
         name=user.name,
+        picture=user.picture,
+        auth_provider=user.auth_provider,
         gmail_connected=user.gmail_connected,
         gmail_email=user.gmail_email,
         created_at=user.created_at

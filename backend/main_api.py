@@ -22,9 +22,10 @@ from auth import (
     UserCreate, UserLogin, Token, UserResponse,
     create_user, authenticate_user, create_access_token,
     get_current_user, user_to_response, update_gmail_tokens,
-    get_db, UserModel
+    get_db, UserModel, create_user_from_google, get_user_by_google_id
 )
 from gmail_oauth import gmail_oauth
+from google_auth import google_auth_handler
 
 # Configure logging
 logging.basicConfig(
@@ -38,7 +39,7 @@ db = None
 llm = None
 
 # In-memory storage for OAuth states and pending responses
-oauth_states: Dict[str, str] = {}  # state -> user_id
+oauth_states: Dict[str, dict] = {}  # state -> {user_id: str, type: 'gmail'|'login'}
 pending_responses: Dict[str, Dict] = {}  # user_id -> {email_id -> PendingResponse}
 
 
@@ -64,8 +65,7 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-#    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
-    allow_origins=["*"], 
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -191,33 +191,129 @@ async def logout():
 
 
 # ============================================================================
-# GMAIL OAUTH ROUTES
+# GOOGLE OAUTH LOGIN ROUTES (Sign in with Google)
 # ============================================================================
 
-@app.get("/api/oauth/gmail/connect")
-async def gmail_connect(current_user: UserModel = Depends(get_current_user)):
+@app.get("/api/auth/google/login")
+async def google_login():
     """
-    Initiate Gmail OAuth flow
-    Returns the authorization URL to redirect user to
+    Initiate Google OAuth for user login (Sign in with Google)
+    Returns the authorization URL
     """
     try:
         # Generate a secure random state
         state = secrets.token_urlsafe(32)
         
-        # Store state with user_id
-        oauth_states[state] = current_user.id
+        # Store state with type 'login'
+        oauth_states[state] = {'type': 'login', 'user_id': None}
         
         # Get authorization URL
-        auth_url = gmail_oauth.get_authorization_url(state)
+        auth_url = google_auth_handler.get_login_url(state)
         
-        logger.info(f"Generated OAuth URL for user: {current_user.email}")
+        logger.info(f"Generated Google login URL")
         
         return {
             "auth_url": auth_url,
             "state": state
         }
     except Exception as e:
-        logger.error(f"Error generating OAuth URL: {e}")
+        logger.error(f"Error generating Google login URL: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/auth/google/callback", response_model=Token)
+async def google_login_callback(
+    callback_data: OAuthCallbackRequest,
+    db_session = Depends(get_db)
+):
+    """
+    Handle Google OAuth callback for login
+    Creates/logs in user and returns JWT token
+    Also saves Gmail tokens if granted
+    """
+    try:
+        code = callback_data.code
+        state = callback_data.state
+        
+        # Verify state
+        if state not in oauth_states:
+            raise HTTPException(status_code=400, detail="Invalid state parameter")
+        
+        state_data = oauth_states[state]
+        
+        # Verify this is a login flow (not gmail connection)
+        if state_data['type'] != 'login':
+            raise HTTPException(status_code=400, detail="Invalid OAuth flow type")
+        
+        # Verify Google token and get user info
+        google_data = google_auth_handler.verify_google_token(code, state)
+        
+        # Check if user exists by Google ID
+        user = get_user_by_google_id(db_session, google_data['google_id'])
+        
+        if not user:
+            # Create new user from Google data
+            user = create_user_from_google(db_session, google_data)
+        
+        # If Gmail tokens were included, save them
+        if google_data.get('gmail_access_token'):
+            update_gmail_tokens(
+                db_session,
+                user.id,
+                gmail_email=google_data['email'],  # Use same email
+                access_token=google_data['gmail_access_token'],
+                refresh_token=google_data.get('gmail_refresh_token'),
+                token_expiry=google_data.get('gmail_token_expiry')
+            )
+            logger.info(f"Gmail tokens saved during login for: {user.email}")
+        
+        # Clean up state
+        del oauth_states[state]
+        
+        # Create access token
+        access_token = create_access_token(data={"sub": user.id})
+        
+        logger.info(f"Successfully logged in user via Google: {user.email}")
+        
+        return Token(
+            access_token=access_token,
+            token_type="bearer",
+            user=user_to_response(user)
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in Google login callback: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# GMAIL OAUTH ROUTES (For Email Access)
+# ============================================================================
+
+@app.get("/api/oauth/gmail/connect")
+async def gmail_connect(current_user: UserModel = Depends(get_current_user)):
+    """
+    Initiate Gmail OAuth flow (for email access)
+    Returns the authorization URL to redirect user to
+    """
+    try:
+        # Generate a secure random state
+        state = secrets.token_urlsafe(32)
+        
+        # Store state with user_id and type 'gmail'
+        oauth_states[state] = {'type': 'gmail', 'user_id': current_user.id}
+        
+        # Get authorization URL
+        auth_url = gmail_oauth.get_authorization_url(state)
+        
+        logger.info(f"Generated Gmail OAuth URL for user: {current_user.email}")
+        
+        return {
+            "auth_url": auth_url,
+            "state": state
+        }
+    except Exception as e:
+        logger.error(f"Error generating Gmail OAuth URL: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -238,7 +334,13 @@ async def gmail_callback(
         if state not in oauth_states:
             raise HTTPException(status_code=400, detail="Invalid state parameter")
         
-        user_id = oauth_states[state]
+        state_data = oauth_states[state]
+        
+        # Verify this is a gmail flow (not login)
+        if state_data['type'] != 'gmail':
+            raise HTTPException(status_code=400, detail="Invalid OAuth flow type")
+        
+        user_id = state_data['user_id']
         
         # Exchange code for tokens
         token_data = gmail_oauth.exchange_code_for_tokens(code, state)
@@ -265,7 +367,7 @@ async def gmail_callback(
         }
         
     except Exception as e:
-        logger.error(f"Error in OAuth callback: {e}")
+        logger.error(f"Error in Gmail OAuth callback: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
