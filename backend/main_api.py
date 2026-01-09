@@ -65,7 +65,11 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "https://email-automation-system1.vercel.app/" # Add your production domain 
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
