@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Mail, Settings, BarChart3, LogOut, CheckCircle, XCircle, Clock, AlertCircle, TrendingUp, Users, Zap } from 'lucide-react';
 
-const API_BASE = 'http://localhost:8000';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
 // Mock user state (replace with real auth)
 const useAuth = () => {
