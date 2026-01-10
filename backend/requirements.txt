@@ -13,4 +13,5 @@ python-dotenv==1.2.1
 python_jose==3.5.0
 SQLAlchemy==2.0.45
 uvicorn==0.40.0
+pydantic[email]
 
