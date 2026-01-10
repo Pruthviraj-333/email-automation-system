@@ -68,7 +68,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:5173",
-        "https://email-automation-system1.vercel.app/" # Add your production domain 
+        "https://email-automation-system-self.vercel.app" # Add your production domain 
     ],
     allow_credentials=True,
     allow_methods=["*"],
