@@ -68,7 +68,9 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://localhost:5173",
-        "https://email-automation-system-self.vercel.app" # Add your production domain 
+        "https://email-automation-system-self.vercel.app" ,# Add your production domain 
+        "https://email-automation-system-git-main-pruthvirajs-projects-eea65728.vercel.app",
+        "https://email-automation-system-1d8zyxo4y-pruthvirajs-projects-eea65728.vercel.app",   
     ],
     allow_credentials=True,
     allow_methods=["*"],
